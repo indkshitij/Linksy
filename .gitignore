@@ -1,6 +1,9 @@
-# dependencies
-/node_modules
-/.pnp
+# =========================================================
+# Dependencies
+# =========================================================
+
+node_modules/
+.pnp/
 .pnp.*
 .yarn/*
 !.yarn/patches
@@ -8,32 +11,380 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/cache/
+.yarn/install-state.gz
 
-# next.js
-/.next/
-/out/
 
-# production
-/build
+# =========================================================
+# Next.js
+# =========================================================
 
-# misc
-.DS_Store
+.next/
+out/
+build/
+
+# Next.js generated files
+next-env.d.ts
+
+
+# =========================================================
+# Production / Deployment
+# =========================================================
+
+.vercel/
+.netlify/
+.turbo/
+
+# Deployment output
+dist/
+server-dist/
+
+
+# =========================================================
+# Environment Variables & Secrets
+# =========================================================
+
+.env
+.env.local
+.env.example
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+
+# Any custom environment files
+.env.*
+
+# Exception: commit the example environment file
+.env.example
+
+# Secrets / credentials
 *.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.cert
 
-# debug
+# Service account credentials
+service-account*.json
+*-service-account.json
+credentials.json
+
+
+# =========================================================
+# Logs
+# =========================================================
+
+*.log
+logs/
+log/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
+debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
 
-# vercel
-.vercel
+# =========================================================
+# Testing
+# =========================================================
 
-# typescript
+coverage/
+.nyc_output/
+.pytest_cache/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+
+# Cypress
+cypress/videos/
+cypress/screenshots/
+
+
+# =========================================================
+# TypeScript
+# =========================================================
+
 *.tsbuildinfo
-next-env.d.ts
+*.tsbuildinfo.*
+
+
+# =========================================================
+# ESLint / Prettier / Tool Caches
+# =========================================================
+
+.eslintcache
+.prettier-cache
+.stylelintcache
+
+# Generic caches
+.cache/
+.parcel-cache/
+.rspack-cache/
+.eslintcache
+
+
+# =========================================================
+# Turbo / Build Caches
+# =========================================================
+
+.turbo/
+
+
+# =========================================================
+# IDE / Editors
+# =========================================================
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+.#*
+*#
+
+
+# =========================================================
+# Operating System Files
+# =========================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# macOS metadata
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+
+
+# =========================================================
+# Temporary Files
+# =========================================================
+
+tmp/
+temp/
+.tmp/
+.temp/
+
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig
+
+
+# =========================================================
+# Local Database / Database Files
+# =========================================================
+
+# SQLite
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# Local MongoDB data
+/data/db/
+/mongodb-data/
+/mongo-data/
+
+# Redis local data
+/dump.rdb
+
+
+# =========================================================
+# Uploaded / User Generated Files
+# =========================================================
+
+# Local uploads
+/uploads/
+/public/uploads/
+
+# User generated files
+/storage/
+media/
+attachments/
+
+# Generated images / files
+generated/
+generated-files/
+
+
+# =========================================================
+# Cache / Runtime Files
+# =========================================================
+
+.cache/
+.cache-loader/
+.parcel-cache/
+.nx/
+.swc/
+
+# React / Next tooling
+.next/
+.next-cache/
+
+
+# =========================================================
+# Local Development
+# =========================================================
+
+# Local server files
+*.pid
+*.pid.lock
+
+# Local development certificates
+.local/
+.localhost/
+
+
+# =========================================================
+# Generated Documentation / Reports
+# =========================================================
+
+reports/
+artifacts/
+screenshots/
+
+
+# =========================================================
+# Code Coverage
+# =========================================================
+
+coverage/
+.nyc_output/
+*.lcov
+
+
+# =========================================================
+# Package Manager Files
+# =========================================================
+
+# npm
+.npm/
+
+# pnpm
+.pnpm-store/
+
+# Yarn
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Yarn Plug'n'Play
+.pnp
+.pnp.*
+
+
+# =========================================================
+# Environment / Cloud Provider Files
+# =========================================================
+
+# Vercel
+.vercel/
+
+# Netlify
+.netlify/
+
+# Firebase local files
+.firebase/
+
+# AWS local credentials
+.aws/
+
+# Google Cloud local configuration
+.gcloud/
+
+
+# =========================================================
+# AI / ML / Local Model Files
+# =========================================================
+
+# If AI features/models are added later
+/models/
+/checkpoints/
+/weights/
+
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+
+# =========================================================
+# Docker
+# =========================================================
+
+# Docker local volumes
+docker-data/
+docker-volumes/
+
+# Docker override files
+docker-compose.override.yml
+
+
+# =========================================================
+# Miscellaneous
+# =========================================================
+
+*.pid
+*.seed
+*.pid.lock
+
+# Backup files
+*.backup
+*.old
+
+# Generated archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+
+# Local certificates
+certs/
+certificates/
+
+# Local secrets
+secrets/
