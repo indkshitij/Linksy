@@ -1,14 +1,14 @@
-import mongoose from "mongoose"
+import mongoose, { Document } from "mongoose"
+
 /* =========================================================
    SESSION
 ========================================================= */
-
 
 export type SessionStatus =
   | "ACTIVE"
   | "REVOKED"
   | "EXPIRED"
-  
+
 export interface ISession extends Document {
   userId: mongoose.Types.ObjectId
 

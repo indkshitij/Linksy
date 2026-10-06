@@ -1,72 +1,113 @@
-import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/db";
-import {
-  sendConnectionRequest,
-} from "@/services/connection.service";
+import { NextRequest } from "next/server"
+import { connectDB } from "@/lib/db"
+import { getCurrentUser } from "@/lib/auth/auth"
+import { successResponse, errorResponse } from "@/lib/response"
+import Connection from "@/models/connection.model"
 
-export async function POST(
-  request: NextRequest
-) {
+export async function GET(request: NextRequest) {
   try {
-    await connectDB();
+    await connectDB()
 
-    const requesterId =
-      request.headers.get("x-user-id");
+    const currentUser = await getCurrentUser(request)
 
-    if (!requesterId) {
-      return NextResponse.json(
+    const connections = await Connection.find({
+      $or: [
         {
-          success: false,
-          error: "Authentication required.",
+          requesterId: currentUser._id,
         },
-        { status: 401 }
-      );
+        {
+          receiverId: currentUser._id,
+        },
+      ],
+    })
+      .populate(
+        "requesterId",
+        "name username headline avatar"
+      )
+      .populate(
+        "receiverId",
+        "name username headline avatar"
+      )
+      .sort({
+        updatedAt: -1,
+      })
+      .lean()
+
+    const accepted = []
+    const incoming = []
+    const outgoing = []
+
+    for (const connection of connections) {
+      const requesterId =
+        connection.requesterId._id.toString()
+
+      const receiverId =
+        connection.receiverId._id.toString()
+
+      const currentUserId =
+        currentUser._id.toString()
+
+      if (connection.status === "ACCEPTED") {
+        const otherUser =
+          requesterId === currentUserId
+            ? connection.receiverId
+            : connection.requesterId
+
+        accepted.push({
+          connectionId: connection._id,
+          user: otherUser,
+          status: connection.status,
+          createdAt: connection.createdAt,
+          updatedAt: connection.updatedAt,
+        })
+
+        continue
+      }
+
+      if (connection.status !== "PENDING") {
+        continue
+      }
+
+      if (receiverId === currentUserId) {
+        incoming.push({
+          connectionId: connection._id,
+          user: connection.requesterId,
+          status: connection.status,
+          createdAt: connection.createdAt,
+          updatedAt: connection.updatedAt,
+        })
+
+        continue
+      }
+
+      if (requesterId === currentUserId) {
+        outgoing.push({
+          connectionId: connection._id,
+          user: connection.receiverId,
+          status: connection.status,
+          createdAt: connection.createdAt,
+          updatedAt: connection.updatedAt,
+        })
+      }
     }
 
-    const body = await request.json();
-
-    const { receiverId } = body;
-
-    if (!receiverId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "receiverId is required.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const connection =
-      await sendConnectionRequest(
-        requesterId,
-        receiverId
-      );
-
-    return NextResponse.json(
+    return successResponse(
+      "Connections retrieved successfully.",
       {
-        success: true,
-        message:
-          "Connection request sent.",
-        data: connection,
-      },
-      { status: 201 }
-    );
+        accepted,
+        incoming,
+        outgoing,
+      }
+    )
   } catch (error) {
     console.error(
-      "Connection request error:",
+      "Get connections error:",
       error
-    );
+    )
 
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to send connection request.",
-      },
-      { status: 400 }
-    );
+    return errorResponse(
+      "Failed to retrieve connections.",
+      500
+    )
   }
 }

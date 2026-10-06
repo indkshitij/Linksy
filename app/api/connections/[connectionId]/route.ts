@@ -1,124 +1,240 @@
-import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/db";
-import Connection from "@/models/connection.model";
+import { NextRequest } from "next/server"
+import { connectDB } from "@/lib/db"
+import { getCurrentUser } from "@/lib/auth/auth"
+import { successResponse, errorResponse } from "@/lib/response"
+import Connection from "@/models/connection.model"
 
 interface RouteContext {
   params: Promise<{
-    connectionId: string;
-  }>;
+    connectionId: string
+  }>
 }
+
+/* =========================================================
+   PATCH
+   ACCEPT / REJECT
+========================================================= */
 
 export async function PATCH(
   request: NextRequest,
   context: RouteContext
 ) {
   try {
-    await connectDB();
+    await connectDB()
 
-    const userId =
-      request.headers.get("x-user-id");
+    const currentUser = await getCurrentUser(request)
 
-    if (!userId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Authentication required.",
-        },
-        { status: 401 }
-      );
+    const { connectionId } = await context.params
+
+    if (!connectionId) {
+      return errorResponse(
+        "Connection ID is required.",
+        400
+      )
     }
 
-    const { connectionId } =
-      await context.params;
+    const body = await request.json()
 
-    const body = await request.json();
+    const { action } = body
 
-    const action = body.action;
-
-    if (
-      action !== "ACCEPT" &&
-      action !== "REJECT"
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Action must be ACCEPT or REJECT.",
-        },
-        { status: 400 }
-      );
+    if (!["ACCEPT", "REJECT"].includes(action)) {
+      return errorResponse(
+        "Action must be ACCEPT or REJECT.",
+        422
+      )
     }
 
     const connection =
-      await Connection.findById(
-        connectionId
-      );
+      await Connection.findById(connectionId)
 
     if (!connection) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Connection request not found.",
-        },
-        { status: 404 }
-      );
+      return errorResponse(
+        "Connection request not found.",
+        404
+      )
     }
 
+    /*
+     * Only the receiver can accept or reject.
+     */
     if (
       connection.receiverId.toString() !==
-      userId
+      currentUser._id.toString()
     ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "You are not allowed to modify this request.",
-        },
-        { status: 403 }
-      );
+      return errorResponse(
+        "You are not authorized to update this connection.",
+        403
+      )
     }
 
-    if (
-      connection.status !== "PENDING"
-    ) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "This connection request is no longer pending.",
-        },
-        { status: 400 }
-      );
+    /*
+     * Only pending requests can be
+     * accepted or rejected.
+     */
+    if (connection.status !== "PENDING") {
+      return errorResponse(
+        "Only pending connection requests can be updated.",
+        409
+      )
     }
 
-    connection.status =
+    const newStatus =
       action === "ACCEPT"
         ? "ACCEPTED"
-        : "REJECTED";
+        : "REJECTED"
 
-    await connection.save();
+    connection.status = newStatus
 
-    return NextResponse.json({
-      success: true,
-      message:
-        action === "ACCEPT"
-          ? "Connection accepted."
-          : "Connection rejected.",
-      data: connection,
-    });
+    await connection.save()
+
+    return successResponse(
+      action === "ACCEPT"
+        ? "Connection request accepted successfully."
+        : "Connection request rejected successfully.",
+      {
+        connectionId: connection._id,
+        requesterId: connection.requesterId,
+        receiverId: connection.receiverId,
+        status: connection.status,
+      }
+    )
   } catch (error) {
     console.error(
       "Connection update error:",
       error
-    );
+    )
 
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          "Failed to update connection.",
-      },
-      { status: 500 }
-    );
+    return errorResponse(
+      "Failed to update connection request.",
+      500
+    )
+  }
+}
+
+/* =========================================================
+   DELETE
+   CANCEL PENDING / REMOVE ACCEPTED
+========================================================= */
+
+export async function DELETE(
+  request: NextRequest,
+  context: RouteContext
+) {
+  try {
+    await connectDB()
+
+    const currentUser = await getCurrentUser(request)
+
+    const { connectionId } = await context.params
+
+    if (!connectionId) {
+      return errorResponse(
+        "Connection ID is required.",
+        400
+      )
+    }
+
+    const connection =
+      await Connection.findById(connectionId)
+
+    if (!connection) {
+      return errorResponse(
+        "Connection not found.",
+        404
+      )
+    }
+
+    const currentUserId =
+      currentUser._id.toString()
+
+    const requesterId =
+      connection.requesterId.toString()
+
+    const receiverId =
+      connection.receiverId.toString()
+
+    /*
+     * User must belong to the connection.
+     */
+    if (
+      currentUserId !== requesterId &&
+      currentUserId !== receiverId
+    ) {
+      return errorResponse(
+        "You are not authorized to modify this connection.",
+        403
+      )
+    }
+
+    /*
+     * Save the previous status before changing it.
+     */
+    const previousStatus = connection.status
+
+    /*
+     * PENDING
+     * → only requester can cancel.
+     */
+    if (previousStatus === "PENDING") {
+      if (currentUserId !== requesterId) {
+        return errorResponse(
+          "Only the requester can cancel a pending connection.",
+          403
+        )
+      }
+
+      connection.status = "CANCELLED"
+
+      await connection.save()
+
+      return successResponse(
+        "Connection request cancelled successfully.",
+        {
+          connectionId: connection._id,
+          requesterId: connection.requesterId,
+          receiverId: connection.receiverId,
+          status: connection.status,
+        }
+      )
+    }
+
+    /*
+     * ACCEPTED
+     * → either user can remove the connection.
+     */
+    if (previousStatus === "ACCEPTED") {
+      connection.status = "REMOVED"
+
+      await connection.save()
+
+      return successResponse(
+        "Connection removed successfully.",
+        {
+          connectionId: connection._id,
+          requesterId: connection.requesterId,
+          receiverId: connection.receiverId,
+          status: connection.status,
+        }
+      )
+    }
+
+    /*
+     * REJECTED / CANCELLED / REMOVED
+     * cannot be modified again.
+     */
+    return errorResponse(
+      "This connection cannot be modified.",
+      409
+    )
+  } catch (error) {
+    console.error(
+      "Connection delete error:",
+      error
+    )
+
+    return errorResponse(
+      "Failed to modify connection.",
+      500
+    )
   }
 }

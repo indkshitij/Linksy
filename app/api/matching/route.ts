@@ -1,231 +1,379 @@
-import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/db";
-import User from "@/models/user.model";
-import Block from "@/models/block.model";
-import Interaction from "@/models/interaction.model";
-import Connection from "@/models/connection.model";
-import { calculateMatchScore } from "@/lib/matching/calculate-score";
+import { NextRequest, NextResponse } from "next/server"
 
-const MAX_DISTANCE_KM = 100;
+import { connectDB } from "@/lib/db"
+import { getCurrentUser } from "@/lib/auth/auth"
 
-export async function GET(
-  request: NextRequest
-) {
+import User from "@/models/user.model"
+import Block from "@/models/block.model"
+import Interaction from "@/models/interaction.model"
+import Connection from "@/models/connection.model"
+
+import { calculateMatchScore } from "@/lib/matching/calculate-score"
+import { formatDistance } from "@/lib/matching/distance"
+
+import type { DistanceUnit } from "@/types/matching"
+
+const DEFAULT_MAX_DISTANCE_KM = 100
+const MAX_ALLOWED_DISTANCE_KM = 500
+
+const DEFAULT_LIMIT = 20
+const MAX_LIMIT = 100
+
+const DISTANCE_UNITS: DistanceUnit[] = ["m", "km", "mi"]
+
+export async function GET(request: NextRequest) {
   try {
-    await connectDB();
+    await connectDB()
 
-    const userId =
-      request.headers.get("x-user-id");
-
-    if (!userId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Authentication required.",
-        },
-        { status: 401 }
-      );
-    }
-
-    const currentUser =
-      await User.findById(userId).lean();
+    // Authenticate request using access token.
+    const currentUser = await getCurrentUser(request)
 
     if (!currentUser) {
       return NextResponse.json(
         {
           success: false,
-          error: "User not found.",
+          message: "Authentication required.",
+          data: null,
         },
-        { status: 404 }
-      );
+        { status: 401 }
+      )
     }
 
+    // Location is required for geo-based discovery.
     if (
       !currentUser.location ||
-      !currentUser.location.coordinates
+      currentUser.location.type !== "Point" ||
+      !currentUser.location.coordinates ||
+      currentUser.location.coordinates.length !== 2
     ) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "Please add your location before discovering people.",
+          message: "Please add your location before discovering people.",
+          data: null,
         },
         { status: 400 }
-      );
+      )
     }
 
-    const now = new Date();
+    const searchParams = request.nextUrl.searchParams
 
-    const blockedUsers =
-      await Block.find({
-        $or: [
-          { blockerId: userId },
-          { blockedId: userId },
-        ],
-      })
-        .select("blockerId blockedId")
-        .lean();
+    // Distance display unit.
+    const requestedUnit = searchParams.get("distanceUnit") ?? "km"
 
-    const blockedIds =
-      blockedUsers.map((block) =>
-        block.blockerId.toString() === userId
-          ? block.blockedId
-          : block.blockerId
-      );
-
-    const interactions =
-      await Interaction.find({
-        userId,
-        action: "PASS",
-      })
-        .select("targetUserId")
-        .lean();
-
-    const passedIds =
-      interactions.map(
-        (interaction) =>
-          interaction.targetUserId
-      );
-
-    const connections =
-      await Connection.find({
-        $or: [
-          { requesterId: userId },
-          { receiverId: userId },
-        ],
-        status: {
-          $in: ["PENDING", "ACCEPTED"],
+    if (!DISTANCE_UNITS.includes(requestedUnit as DistanceUnit)) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Invalid distance unit. Use m, km, or mi.",
+          data: null,
         },
-      })
-        .select("requesterId receiverId")
-        .lean();
+        { status: 422 }
+      )
+    }
 
-    const connectionIds =
-      connections.map((connection) => {
-        return connection.requesterId.toString() ===
-          userId
-          ? connection.receiverId
-          : connection.requesterId;
-      });
+    const distanceUnit = requestedUnit as DistanceUnit
+
+    // Maximum discovery radius.
+    const maxDistanceParam = searchParams.get("maxDistanceKm")
+
+    const maxDistanceKm = maxDistanceParam
+      ? Number(maxDistanceParam)
+      : DEFAULT_MAX_DISTANCE_KM
+
+    if (
+      !Number.isFinite(maxDistanceKm) ||
+      maxDistanceKm <= 0 ||
+      maxDistanceKm > MAX_ALLOWED_DISTANCE_KM
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `maxDistanceKm must be between 1 and ${MAX_ALLOWED_DISTANCE_KM}.`,
+          data: null,
+        },
+        { status: 422 }
+      )
+    }
+
+    // Number of matches to return.
+    const limitParam = searchParams.get("limit")
+
+    const limit = limitParam ? Number(limitParam) : DEFAULT_LIMIT
+
+    if (!Number.isInteger(limit) || limit <= 0 || limit > MAX_LIMIT) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: `limit must be between 1 and ${MAX_LIMIT}.`,
+          data: null,
+        },
+        { status: 422 }
+      )
+    }
+
+    const userId = currentUser._id
+    const now = new Date()
+
+    /*
+     * -------------------------------------------------------
+     * BLOCKED USERS
+     * -------------------------------------------------------
+     *
+     * Blocking is bidirectional for discovery.
+     *
+     * If A blocks B:
+     * - A cannot discover B
+     * - B cannot discover A
+     */
+
+    const blockedUsers = await Block.find({
+      $or: [
+        { blockerId: userId },
+        { blockedId: userId },
+      ],
+    })
+      .select("blockerId blockedId")
+      .lean()
+
+    const blockedIds = blockedUsers.map((block) => {
+      return block.blockerId.toString() === userId.toString()
+        ? block.blockedId
+        : block.blockerId
+    })
+
+    /*
+     * -------------------------------------------------------
+     * PASSED USERS
+     * -------------------------------------------------------
+     *
+     * Users the current user already passed
+     * should not appear again.
+     */
+
+    const interactions = await Interaction.find({
+      userId,
+      action: "PASS",
+    })
+      .select("targetUserId")
+      .lean()
+
+    const passedIds = interactions.map(
+      (interaction) => interaction.targetUserId
+    )
+
+    /*
+     * -------------------------------------------------------
+     * EXISTING CONNECTIONS
+     * -------------------------------------------------------
+     *
+     * Don't show users with an existing pending
+     * or accepted connection.
+     */
+
+    const connections = await Connection.find({
+      $or: [
+        { requesterId: userId },
+        { receiverId: userId },
+      ],
+      status: {
+        $in: ["PENDING", "ACCEPTED"],
+      },
+    })
+      .select("requesterId receiverId")
+      .lean()
+
+    const connectionIds = connections.map((connection) => {
+      return connection.requesterId.toString() === userId.toString()
+        ? connection.receiverId
+        : connection.requesterId
+    })
+
+    /*
+     * -------------------------------------------------------
+     * EXCLUDED USERS
+     * -------------------------------------------------------
+     */
 
     const excludedIds = [
       userId,
       ...blockedIds,
       ...passedIds,
       ...connectionIds,
-    ];
+    ]
 
-    const candidates =
-      await User.aggregate([
-        {
-          $geoNear: {
-            near: {
-              type: "Point",
-              coordinates:
-                currentUser.location.coordinates,
+    /*
+     * -------------------------------------------------------
+     * GEO DISCOVERY
+     * -------------------------------------------------------
+     *
+     * MongoDB calculates geographic distance.
+     *
+     * Exact coordinates are never returned to the client.
+     */
+
+    const candidates = await User.aggregate([
+      {
+        $geoNear: {
+          near: currentUser.location,
+          key: "location",
+          distanceField: "distanceInMeters",
+          spherical: true,
+          maxDistance: maxDistanceKm * 1000,
+
+          query: {
+            _id: {
+              $nin: excludedIds,
             },
 
-            distanceField:
-              "distanceInMeters",
+            status: "ACTIVE",
 
-            spherical: true,
+            emailVerified: true,
 
-            maxDistance:
-              MAX_DISTANCE_KM * 1000,
+            phoneVerified: true,
 
-            query: {
-              _id: {
-                $nin: excludedIds,
-              },
+            availabilityStatus: "AVAILABLE",
 
-              availabilityStatus:
-                "AVAILABLE",
+            availabilityStart: {
+              $lte: now,
+            },
 
-              availabilityEnd: {
-                $gt: now,
-              },
+            availabilityEnd: {
+              $gt: now,
             },
           },
         },
+      },
 
-        {
-          $limit: 100,
-        },
+      // Keep the candidate pool reasonable.
+      {
+        $limit: 100,
+      },
 
-        {
-          $project: {
-            password: 0,
-          },
+      // Only return fields required by matching.
+      {
+        $project: {
+          name: 1,
+          username: 1,
+          avatar: 1,
+          headline: 1,
+          skills: 1,
+          interests: 1,
+          availabilityMode: 1,
+          experienceLevel: 1,
+          distanceInMeters: 1,
         },
-      ]);
+      },
+    ])
+
+    /*
+     * -------------------------------------------------------
+     * MATCH SCORING
+     * -------------------------------------------------------
+     */
 
     const results = candidates
       .map((candidate) => {
-        const distanceKm =
-          candidate.distanceInMeters /
-          1000;
+        // MongoDB distance is returned in meters.
+        const distanceKm = candidate.distanceInMeters / 1000
 
-        const match =
-          calculateMatchScore({
-            userSkills:
-              currentUser.skills || [],
+        const match = calculateMatchScore({
+          userSkills: currentUser.skills ?? [],
+          userInterests: currentUser.interests ?? [],
 
-            userInterests:
-              currentUser.interests || [],
+          targetSkills: candidate.skills ?? [],
+          targetInterests: candidate.interests ?? [],
 
-            targetSkills:
-              candidate.skills || [],
+          userMode: currentUser.availabilityMode,
+          targetMode: candidate.availabilityMode,
 
-            targetInterests:
-              candidate.interests || [],
+          userExperienceLevel: currentUser.experienceLevel,
+          targetExperienceLevel: candidate.experienceLevel,
 
-            userMode:
-              currentUser.availabilityMode,
+          distanceKm,
+        })
 
-            targetMode:
-              candidate.availabilityMode,
-
-            distanceKm,
-          });
+        // Convert distance only for display.
+        const displayDistance = formatDistance(
+          candidate.distanceInMeters,
+          distanceUnit
+        )
 
         return {
-          ...candidate,
+          id: candidate._id.toString(),
 
-          distanceKm: Number(
-            distanceKm.toFixed(1)
-          ),
+          name: candidate.name,
+
+          username: candidate.username,
+
+          avatar: candidate.avatar ?? null,
+
+          headline: candidate.headline ?? null,
+
+          skills: candidate.skills ?? [],
+
+          interests: candidate.interests ?? [],
+
+          availabilityMode:
+            candidate.availabilityMode ?? null,
+
+          experienceLevel:
+            candidate.experienceLevel ?? null,
+
+          distance: displayDistance,
+
+          distanceUnit,
+
+          // Approximate distance only.
+          distanceKm: Number(distanceKm.toFixed(1)),
 
           matchScore: match.score,
 
-          commonSkills:
-            match.commonSkills,
+          commonSkills: match.commonSkills,
 
-          commonInterests:
-            match.commonInterests,
-        };
+          commonInterests: match.commonInterests,
+
+          scoreBreakdown: match.breakdown,
+        }
       })
-      .sort(
-        (a, b) =>
-          b.matchScore - a.matchScore
-      );
 
-    return NextResponse.json({
-      success: true,
-      data: results,
-    });
+      // Highest match score first.
+      .sort((a, b) => b.matchScore - a.matchScore)
+
+    /*
+     * -------------------------------------------------------
+     * FINAL RESULT
+     * -------------------------------------------------------
+     */
+
+    const matches = results.slice(0, limit)
+
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Matches retrieved successfully.",
+        data: {
+          matches,
+          count: matches.length,
+          distanceUnit,
+          maxDistanceKm,
+        },
+      },
+      { status: 200 }
+    )
   } catch (error) {
-    console.error(
-      "Matching API error:",
-      error
-    );
+    console.error("GET /api/matching error:", error)
 
     return NextResponse.json(
       {
         success: false,
-        error:
-          "Failed to find matching users.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Failed to find matching users.",
+        data: null,
       },
       { status: 500 }
-    );
+    )
   }
 }

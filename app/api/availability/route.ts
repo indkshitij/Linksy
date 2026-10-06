@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from "next/server"
 import { connectDB } from "@/lib/db"
-import User from "@/models/user.model"
+import { getCurrentUser } from "@/lib/auth/auth"
 import { availabilitySchema } from "@/lib/validation/availability"
 import { validateAvailabilityDuration } from "@/lib/availability/availability-validation"
 
 export async function POST(request: NextRequest) {
   try {
     await connectDB()
+
+    // Get authenticated user from access token
+    const user = await getCurrentUser(request)
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Authentication required.",
+          data: null,
+        },
+        { status: 401 }
+      )
+    }
 
     const body = await request.json()
 
@@ -16,82 +30,74 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "Invalid availability data.",
-          details: parsed.error.flatten(),
+          message: "Invalid availability data.",
+          data: parsed.error.flatten(),
         },
-        { status: 400 }
+        { status: 422 }
       )
     }
 
     const { mode, start, end, latitude, longitude } = parsed.data
 
+    // Validate mode-specific maximum duration
     validateAvailabilityDuration({
       mode,
       start,
       end,
     })
 
-    /*
-     * TEMPORARY:
-     * Replace this with the authenticated
-     * user's ID from your session.
-     */
-    const userId = request.headers.get("x-user-id")
-
-    if (!userId) {
+    // Prevent starting availability in the past
+    if (start.getTime() < Date.now()) {
       return NextResponse.json(
         {
           success: false,
-          error: "Authentication required.",
+          message: "Availability cannot start in the past.",
+          data: null,
         },
-        { status: 401 }
+        { status: 422 }
       )
     }
 
-    const user = await User.findById(userId)
-
-    if (!user) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "User not found.",
-        },
-        { status: 404 }
-      )
-    }
-
+    // Update availability
     user.availabilityStatus = "AVAILABLE"
     user.availabilityMode = mode
     user.availabilityStart = start
     user.availabilityEnd = end
 
-    user.location = {
-      type: "Point",
-      coordinates: [longitude, latitude],
+    // Update location when provided
+    if (latitude !== undefined && longitude !== undefined) {
+      user.location = {
+        type: "Point",
+        coordinates: [longitude, latitude],
+      }
     }
 
     await user.save()
 
-    return NextResponse.json({
-      success: true,
-      message: "Availability activated.",
-      data: {
-        status: user.availabilityStatus,
-        mode: user.availabilityMode,
-        start: user.availabilityStart,
-        end: user.availabilityEnd,
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Availability activated successfully.",
+        data: {
+          status: user.availabilityStatus,
+          mode: user.availabilityMode,
+          start: user.availabilityStart,
+          end: user.availabilityEnd,
+        },
       },
-    })
+      { status: 200 }
+    )
   } catch (error) {
-    console.error("Availability API error:", error)
+    console.error("POST /api/availability error:", error)
 
     return NextResponse.json(
       {
         success: false,
-        error:
+        message:
           error instanceof Error
             ? error.message
-            : "Failed to update availability.",
+            : "Failed to activate availability.",
+        data: null,
       },
       { status: 500 }
     )
@@ -102,57 +108,102 @@ export async function DELETE(request: NextRequest) {
   try {
     await connectDB()
 
-    const userId = request.headers.get("x-user-id")
-
-    if (!userId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Authentication required.",
-        },
-        { status: 401 }
-      )
-    }
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      {
-        $set: {
-          availabilityStatus: "OFFLINE",
-        },
-
-        $unset: {
-          availabilityMode: "",
-          availabilityStart: "",
-          availabilityEnd: "",
-        },
-      },
-      {
-        new: true,
-      }
-    )
+    // Get authenticated user from access token
+    const user = await getCurrentUser(request)
 
     if (!user) {
       return NextResponse.json(
         {
           success: false,
-          error: "User not found.",
+          message: "Authentication required.",
+          data: null,
         },
-        { status: 404 }
+        { status: 401 }
       )
     }
 
-    return NextResponse.json({
-      success: true,
-      message: "Availability turned off.",
-    })
+    user.availabilityStatus = "OFFLINE"
+    user.availabilityMode = undefined
+    user.availabilityStart = undefined
+    user.availabilityEnd = undefined
+
+    await user.save()
+
+    return NextResponse.json(
+      {
+        success: true,
+        message: "Availability turned off successfully.",
+        data: {
+          status: user.availabilityStatus,
+        },
+      },
+      { status: 200 }
+    )
   } catch (error) {
-    console.error("Disable availability error:", error)
+    console.error("DELETE /api/availability error:", error)
 
     return NextResponse.json(
       {
         success: false,
-        error: "Failed to disable availability.",
+        message: "Failed to disable availability.",
+        data: null,
+      },
+      { status: 500 }
+    )
+  }
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    await connectDB()
+
+    const user = await getCurrentUser(request)
+
+    if (!user) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Authentication required.",
+          data: null,
+        },
+        { status: 401 }
+      )
+    }
+
+    const now = new Date()
+
+    // Automatically treat expired availability as offline
+    if (
+      user.availabilityStatus === "AVAILABLE" &&
+      user.availabilityEnd &&
+      user.availabilityEnd <= now
+    ) {
+      user.availabilityStatus = "OFFLINE"
+      user.availabilityMode = undefined
+      user.availabilityStart = undefined
+      user.availabilityEnd = undefined
+
+      await user.save()
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Availability retrieved successfully.",
+      data: {
+        status: user.availabilityStatus,
+        mode: user.availabilityMode ?? null,
+        start: user.availabilityStart ?? null,
+        end: user.availabilityEnd ?? null,
+      },
+    })
+  } catch (error) {
+    console.error("GET /api/availability error:", error)
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: "Failed to retrieve availability.",
+        data: null,
       },
       { status: 500 }
     )

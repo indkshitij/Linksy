@@ -4,7 +4,6 @@ import { GoogleLogin } from "@react-oauth/google"
 import { useState } from "react"
 
 export default function GoogleTestPage() {
-  
   const [result, setResult] = useState<any>(null)
 
   async function handleGoogleSuccess(credentialResponse: any) {
@@ -30,9 +29,7 @@ export default function GoogleTestPage() {
   return (
     <main className="flex min-h-screen items-center justify-center">
       <div className="space-y-6 text-center">
-        <h1 className="text-2xl font-bold">
-          Linksy Google Login Test
-        </h1>
+        <h1 className="text-2xl font-bold">Linksy Google Login Test</h1>
 
         <GoogleLogin
           onSuccess={handleGoogleSuccess}
@@ -42,7 +39,7 @@ export default function GoogleTestPage() {
         />
 
         {result && (
-          <pre className="max-w-xl overflow-auto rounded-lg bg-gray-800  p-4 text-left text-sm">
+          <pre className="max-w-xl overflow-auto rounded-lg bg-gray-800 p-4 text-left text-sm">
             {JSON.stringify(result, null, 2)}
           </pre>
         )}
